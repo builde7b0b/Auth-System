@@ -75,6 +75,21 @@ For example, in the api.js file, the loginUser and registerUser functions should
 
 This example uses Express.js for the backend and Mongoose for the User model. The server.js file defines two routes: /api/register and /api/login.
 
+## Stripe Integration
+
+This project includes a complete Stripe payment processing system that allows users to upgrade to premium status. The integration uses Stripe's PaymentIntent API for secure payment processing.
+
+### Features
+
+- Secure payment processing with Stripe Elements
+- Premium subscription management
+- User subscription status tracking
+- Environment-specific configuration (test/production)
+
+### Frontend Implementation
+
+The frontend uses the official Stripe React libraries:
+
 The /api/register route handles user registration. It checks if the user already exists, hashes the password, and creates a new user in the database.
 
 The /api/login route handles user login. It finds the user by email, compares the provided password with the hashed password, and generates a JWT token if the credentials are valid.
@@ -82,3 +97,123 @@ The /api/login route handles user login. It finds the user by email, compares th
 The LoginForm and RegisterForm components from the React side should match these API endpoints.
 
 For example, the loginUser and registerUser functions in the api.js file should make requests to the /api/login and /api/register endpoints, respectively.
+```
+// Stripe Elements setup in index.js
+import { Elements } from '@stripe/react-stripe-js';
+import { loadStripe } from '@stripe/stripe-js';
+// For development (test mode)
+const stripePromise = loadStripe(process.env.REACT_APP_STRIPE_KEY);
+// For production
+// const stripePromise = loadStripe(process.env.REACT_APP_STRIPE_KEY_PROD);
+// Wrap your app with the Stripe Elements provider
+root.render(
+<React.StrictMode>
+<Elements stripe={stripePromise}>
+<App />
+</Elements>
+</React.StrictMode>
+);
+
+```
+### Backend Implementation
+
+The backend handles payment intents creation and subscription status management:
+Create a payment intent
+```
+@bp.route('/api/create-payment-intent', methods=['POST'])
+def create_payment_intent():
+try:
+data = request.json
+intent = stripe.PaymentIntent.create(
+amount=data['amount'], # amount in cents
+currency='usd',
+)
+return jsonify({
+'clientSecret': intent['client_secret'],
+'id': intent['id']
+})
+except Exception as e:
+return jsonify(error=str(e)), 400
+```
+Check user's subscription status
+```
+@bp.route('/check-subscription', methods=['GET'])
+@jwt_required()
+def check_subscription_status():
+mongo = app.config['MONGO_INSTANCE']
+current_user_email = get_jwt_identity()
+user = mongo.db.users.find_one({'email': current_user_email})
+if user and 'is_premium' in user:
+return jsonify({'isPremium': user['is_premium']}), 200
+else:
+return jsonify({'error': 'User not found or subscription status unavailable'}), 404
+```
+Update user to premium status after successful payment
+```
+@bp.route('/update-premium-status', methods=['POST'])
+@jwt_required()
+def update_premium_status():
+mongo = app.config['MONGO_INSTANCE']
+current_user_email = get_jwt_identity()
+user = mongo.db.users.find_one({'email': current_user_email})
+if not user:
+return jsonify({'error': 'User not found'}), 404
+update_result = mongo.db.users.update_one(
+{'id': ObjectId(user['_id'])},
+{'$set': {'is_premium': True}}
+)
+return jsonify({'result': 'User status updated to premium'}), 200
+```
+
+### Environment Configuration
+
+The integration supports both test and production environments:
+
+#### Backend
+TESTING
+`stripe.api_key = os.environ.get('STRIPE_API_SECRET_TEST')`
+PRODUCTION
+`stripe.api_key = os.environ.get('STRIPE_API_SECRET_PROD')`
+
+#### Frontend
+```
+// const stripePromise = loadStripe(process.env.REACT_APP_STRIPE_KEY_PROD);
+```
+
+
+### Implementation Steps
+
+1. **Set up environment variables**:
+   - `REACT_APP_STRIPE_KEY`: Your Stripe publishable key for test mode
+   - `REACT_APP_STRIPE_KEY_PROD`: Your Stripe publishable key for production
+   - `STRIPE_API_SECRET_TEST`: Your Stripe secret key for test mode
+   - `STRIPE_API_SECRET_PROD`: Your Stripe secret key for production
+
+2. **Create a payment form component** that uses Stripe Elements to collect card information securely.
+
+3. **Implement the payment flow**:
+   - Frontend sends a request to create a payment intent
+   - Backend creates the payment intent and returns the client secret
+   - Frontend uses the client secret to confirm the payment with Stripe.js
+   - On successful payment, backend updates the user's premium status
+
+4. **Add subscription status checking** to enable/disable premium features based on the user's status.
+
+### Testing
+
+For testing, use Stripe's test cards:
+
+- Success: `4242 4242 4242 4242`
+- Requires Authentication: `4000 0025 0000 3155`
+- Declined: `4000 0000 0000 0002`
+
+Use any future expiration date, any 3-digit CVC, and any postal code.
+
+### Going to Production
+
+When ready to go live:
+
+1. Uncomment the production Stripe key lines in both frontend and backend
+2. Comment out the test key lines
+3. Ensure your Stripe account is properly configured for live payments
+4. Test the entire payment flow in production mode with real cards
